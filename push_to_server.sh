@@ -2,11 +2,7 @@
 # =====================================================
 # 脚本名称：push_to_server.sh
 # 功能描述：将本地指定的文件上传到云服务器（仅同步以下文件）
-#           不会删除服务器其他文件，也不会同步其他文件
-# 同步文件列表：
-#   README.md, lsky.kv, main.py, buildozer.spec,
-#   lsky_config.py, wqy-microhei.ttc,
-#   pull_from_server.sh, push_to_server.sh
+#           使用单个 rsync 进程，只建立一个 SSH 连接，避免重复输入密码
 # =====================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,7 +25,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# 要同步的文件列表（相对于项目根目录）
 FILES=(
     "README.md"
     "lsky.kv"
@@ -39,7 +34,6 @@ FILES=(
     "wqy-microhei.ttc"
     "pull_from_server.sh"
     "push_to_server.sh"
-    "lsky_config.py"
 )
 
 if ! command -v rsync &> /dev/null; then
@@ -52,16 +46,27 @@ if [ ! -d "$LOCAL_PATH" ]; then
     exit 1
 fi
 
-echo -e "${GREEN}开始将本地指定文件推送到服务器...${NC}"
+# 创建临时文件列表（本地文件必须存在）
+TEMP_FILE_LIST=$(mktemp)
 for file in "${FILES[@]}"; do
-    SRC="${LOCAL_PATH}/${file}"
-    DEST="${SERVER_USER}@${SERVER_IP}:${SERVER_PATH}/${file}"
-    if [ -f "$SRC" ]; then
-        echo "同步: $file"
-        rsync -avz -e ssh "$SRC" "$DEST"
+    if [ -f "$LOCAL_PATH/$file" ]; then
+        echo "$file" >> "$TEMP_FILE_LIST"
     else
-        echo -e "${YELLOW}跳过：本地文件 $file 不存在${NC}"
+        echo -e "${YELLOW}警告：本地文件 $file 不存在，已跳过。${NC}"
     fi
 done
 
-echo -e "${GREEN}✅ 推送完成。${NC}"
+echo -e "${GREEN}开始将本地指定文件推送到服务器（单次连接）...${NC}"
+rsync -avz --files-from="$TEMP_FILE_LIST" -e ssh \
+    "$LOCAL_PATH/" \
+    "${SERVER_USER}@${SERVER_IP}:${SERVER_PATH}/"
+
+RSYNC_EXIT=$?
+rm -f "$TEMP_FILE_LIST"
+
+if [ $RSYNC_EXIT -eq 0 ]; then
+    echo -e "${GREEN}✅ 推送完成。${NC}"
+else
+    echo -e "${RED}❌ 推送失败。${NC}"
+    exit 1
+fi
