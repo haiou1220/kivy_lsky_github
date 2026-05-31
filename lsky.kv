@@ -1,0 +1,46 @@
+<ImagePublisher>:
+    orientation: 'vertical'
+    padding: 15
+    spacing: 10
+    font_name: 'WQY'
+
+    Label:
+        id: status_label
+        text: "就绪"
+        color: 0.5, 0.5, 0.5, 1
+        size_hint: 1, 0.05
+
+    Image:
+        id: img_preview
+        size_hint: 1, 0.4
+        allow_stretch: True
+        keep_ratio: True
+        source: ""
+
+    BoxLayout:
+        size_hint: 1, 0.1
+        spacing: 10
+
+        Button:
+            text: "选择图片"
+            on_press: root.show_file_chooser()
+
+        Button:
+            id: upload_btn
+            text: "上传到兰空图床"
+            on_press: root.start_upload()
+
+    BoxLayout:
+        size_hint: 1, 0.1
+        spacing: 5
+
+        TextInput:
+            id: link_input
+            hint_text: "上传成功后这里显示链接..."
+            readonly: True
+            size_hint: 0.8, 1
+
+        Button:
+            text: "复制链接"
+            size_hint: 0.2, 1
+            on_press: root.copy_link()

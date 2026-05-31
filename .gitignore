@@ -1,0 +1,7 @@
+.buildozer/
+bin/
+venv/
+lsky_config.py
+
+__pycache__/main.cpython-311.pyc
+__pycache__/lsky_config.cpython-311.pyc
