@@ -40,6 +40,7 @@ FILES=(
     "wqy-microhei.ttc"
     "pull_from_server.sh"
     "push_to_server.sh"
+    "lsky_config.py"
 )
 
 # 检查 rsync
