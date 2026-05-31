@@ -1,6 +1,5 @@
 import os
 import threading
-import requests
 from pathlib import Path
 import uuid
 
@@ -30,15 +29,6 @@ from plyer import filechooser
 if platform == "android":
     from android.permissions import request_permissions, Permission
     from jnius import autoclass, jarray
-
-try:
-    from lsky_config import LSKY_API_URL, LSKY_TOKEN
-except ImportError as exc:
-    raise RuntimeError(
-        "缺少私有配置文件 lsky_config.py，请在项目根目录创建并填写 "
-        "LSKY_API_URL 和 LSKY_TOKEN。"
-    ) from exc
-
 
 def _guess_extension(display_name, mime_type):
     if display_name:
@@ -117,18 +107,34 @@ def uri_to_file(uri):
         raise Exception(f"无法转换 URI 到文件: {e}")
 
 
+def load_lsky_config():
+    try:
+        from lsky_config import LSKY_API_URL, LSKY_TOKEN
+    except ImportError as exc:
+        raise Exception("缺少私有配置文件 lsky_config.py，请填写图床地址和 token 后重新打包") from exc
+
+    if not LSKY_API_URL or not LSKY_TOKEN:
+        raise Exception("lsky_config.py 中的 LSKY_API_URL 或 LSKY_TOKEN 为空")
+
+    return LSKY_API_URL, LSKY_TOKEN
+
+
 def upload_to_lsky(image_path_or_uri: str) -> str:
     """上传图片到兰空图床，支持 Android content URI，返回图片直链"""
+    import requests
+
+    api_url, token = load_lsky_config()
+
     # 如果是 URI，先转为临时文件
     file_path = uri_to_file(image_path_or_uri)
 
     headers = {
-        "Authorization": LSKY_TOKEN,
+        "Authorization": token,
         "Accept": "application/json",
     }
     with open(file_path, "rb") as f:
         files = {"file": (Path(file_path).name, f, "image/*")}
-        resp = requests.post(LSKY_API_URL, headers=headers, files=files, timeout=30)
+        resp = requests.post(api_url, headers=headers, files=files, timeout=30)
 
     # 如果是临时文件，上传后删除
     if file_path != image_path_or_uri and os.path.exists(file_path):

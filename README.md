@@ -73,3 +73,12 @@ bin/imageuploader-0.1-arm64-v8a-debug.apk
 - `LSKY_TOKEN` 是否以 `Bearer ` 开头。
 - 手机网络是否可访问图床域名。
 
+## RSYNC同步上传与下载
+创建配置文件（手动）
+```bash
+nano rsync_config.env
+chmod +x pull_from_server.sh push_to_server.sh
+./pull_from_server.sh   # 下载
+# 修改本地代码...
+./push_to_server.sh     # 上传
+```
