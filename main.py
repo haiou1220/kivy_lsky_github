@@ -3,32 +3,20 @@ import threading
 from pathlib import Path
 import uuid
 
-# 1. 全局默认字体配置（必须在任何 Kivy 导入前）
-from kivy.config import Config
-Config.set('kivy', 'default_font', ['WQY', 'wqy-microhei.ttc'])
-
-# 2. 注册字体
-from kivy.core.text import LabelBase
-LabelBase.register(name='WQY', fn_regular='wqy-microhei.ttc')
-
-# 3. 现在导入其余 Kivy 组件
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.uix.image import Image
-from kivy.uix.textinput import TextInput
 from kivy.clock import mainthread
-from kivy.core.clipboard import Clipboard
+from kivy.properties import StringProperty
 from kivy import platform
 
-# 4. 导入 plyer 文件选择器
-from plyer import filechooser
+FONT_PATH = Path(__file__).resolve().with_name("wqy-microhei.ttc")
 
-# 5. Android 权限相关 (仅在 Android 上导入)
-if platform == "android":
-    from android.permissions import request_permissions, Permission
-    from jnius import autoclass, jarray
+
+def _android_permission(name, fallback):
+    from android.permissions import Permission
+
+    return getattr(Permission, name, fallback)
+
 
 def _guess_extension(display_name, mime_type):
     if display_name:
@@ -50,24 +38,12 @@ def _guess_extension(display_name, mime_type):
 
 
 def _android_uri_metadata(content_resolver, parcelable_uri):
-    display_name = None
-    mime_type = content_resolver.getType(parcelable_uri)
-
-    cursor = None
     try:
-        OpenableColumns = autoclass("android.provider.OpenableColumns")
-        cursor = content_resolver.query(parcelable_uri, None, None, None, None)
-        if cursor and cursor.moveToFirst():
-            name_index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if name_index >= 0:
-                display_name = cursor.getString(name_index)
+        mime_type = content_resolver.getType(parcelable_uri)
     except Exception:
-        pass
-    finally:
-        if cursor:
-            cursor.close()
+        mime_type = None
 
-    return display_name, mime_type
+    return None, mime_type
 
 
 def uri_to_file(uri):
@@ -83,6 +59,8 @@ def uri_to_file(uri):
 
     # Android 专用：通过 ContentResolver 打开输入流
     try:
+        from jnius import autoclass, jarray
+
         PythonActivity = autoclass("org.kivy.android.PythonActivity")
         activity = PythonActivity.mActivity
         content_resolver = activity.getContentResolver()
@@ -159,26 +137,28 @@ class ImagePublisher(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.selected_path = None
-        self.preview_cache_path = None
-
-        # 如果是 Android，启动时请求权限
-        if platform == "android":
-            self.request_android_permissions()
+        self.selected_cache_path = None
 
     def request_android_permissions(self):
         """请求 Android 媒体访问权限"""
+        from android.permissions import request_permissions
+
         perms = []
         # 根据 Android 版本决定需要哪些权限
         try:
             from android import api_version
-            if api_version >= 33:  # Android 13+
-                perms.append(Permission.READ_MEDIA_IMAGES)
+            version = api_version() if callable(api_version) else api_version
+            if version >= 33:  # Android 13+
+                perms.append(_android_permission("READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_IMAGES"))
             else:
-                perms.append(Permission.READ_EXTERNAL_STORAGE)
+                perms.append(_android_permission("READ_EXTERNAL_STORAGE", "android.permission.READ_EXTERNAL_STORAGE"))
         except:
-            perms.append(Permission.READ_EXTERNAL_STORAGE)
+            perms.append(_android_permission("READ_EXTERNAL_STORAGE", "android.permission.READ_EXTERNAL_STORAGE"))
 
-        request_permissions(perms, self.permissions_callback)
+        try:
+            request_permissions(perms, self.permissions_callback)
+        except Exception as exc:
+            self.ids.status_label.text = f"权限请求失败: {exc}"
 
     def permissions_callback(self, permissions, grant_results):
         if all(grant_results):
@@ -188,41 +168,34 @@ class ImagePublisher(BoxLayout):
 
     def show_file_chooser(self):
         """调用系统原生图片选择器"""
-        filechooser.open_file(
-            on_selection=self.on_file_selected,
-            filters=["*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp"]
-        )
+        try:
+            from plyer import filechooser
+
+            filechooser.open_file(
+                on_selection=self.on_file_selected,
+                filters=["*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp"]
+            )
+        except Exception as exc:
+            self.ids.status_label.text = f"无法打开文件选择器: {exc}"
 
     @mainthread
     def on_file_selected(self, selection):
         """文件选择回调"""
         if selection:
             raw_path = str(selection[0])   # Android 上可能是 content:// URI
-            self.ids.status_label.text = "正在读取图片..."
-            threading.Thread(target=self._prepare_selected_file, args=(raw_path,), daemon=True).start()
+            self._remove_cached_file(self.selected_cache_path)
+            self.selected_cache_path = None
+            self.selected_path = raw_path
+            self.ids.img_preview.source = ""
+            self.ids.img_preview.texture = None
+            self.ids.status_label.text = f"已选择: {self._display_selected_name(raw_path)}"
         else:
             self.ids.status_label.text = "未选择任何文件"
 
-    def _prepare_selected_file(self, raw_path):
-        try:
-            file_path = uri_to_file(raw_path)
-            self._update_selected_file(file_path, raw_path.startswith("content://"))
-        except Exception as e:
-            self._update_ui_on_error(str(e))
-
-    @mainthread
-    def _update_selected_file(self, file_path, is_cache_file):
-        if self.preview_cache_path and self.preview_cache_path != file_path:
-            try:
-                os.unlink(self.preview_cache_path)
-            except OSError:
-                pass
-
-        self.selected_path = file_path
-        self.preview_cache_path = file_path if is_cache_file else None
-        self.ids.img_preview.source = file_path
-        self.ids.img_preview.reload()
-        self.ids.status_label.text = f"已选择: {os.path.basename(file_path)}"
+    def _display_selected_name(self, raw_path):
+        if raw_path.startswith("content://"):
+            return "系统相册图片"
+        return os.path.basename(raw_path)
 
     def start_upload(self):
         """启动后台上传"""
@@ -231,16 +204,42 @@ class ImagePublisher(BoxLayout):
             return
 
         self.ids.upload_btn.disabled = True
-        self.ids.status_label.text = "正在上传..."
-        threading.Thread(target=self._do_upload, daemon=True).start()
+        self.ids.status_label.text = "正在准备图片..."
 
-    def _do_upload(self):
+        try:
+            upload_path = self._prepare_upload_path(self.selected_path)
+        except Exception as e:
+            self._update_ui_on_error(str(e))
+            return
+
+        self.ids.status_label.text = "正在上传..."
+        threading.Thread(target=self._do_upload, args=(upload_path,), daemon=True).start()
+
+    def _prepare_upload_path(self, selected_path):
+        if not selected_path.startswith("content://"):
+            return selected_path
+
+        cache_path = uri_to_file(selected_path)
+        self._remove_cached_file(self.selected_cache_path, keep={cache_path})
+        self.selected_cache_path = cache_path
+        return cache_path
+
+    def _do_upload(self, upload_path):
         """后台线程执行上传，并回调主线程更新UI"""
         try:
-            url = upload_to_lsky(self.selected_path)
+            url = upload_to_lsky(upload_path)
             self._update_ui_on_success(url)
         except Exception as e:
             self._update_ui_on_error(str(e))
+
+    def _remove_cached_file(self, path, keep=None):
+        if not path or (keep and path in keep):
+            return
+
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
     @mainthread
     def _update_ui_on_success(self, url):
@@ -257,6 +256,8 @@ class ImagePublisher(BoxLayout):
         """复制链接到剪贴板"""
         link = self.ids.link_input.text.strip()
         if link:
+            from kivy.core.clipboard import Clipboard
+
             Clipboard.copy(link)
             self.ids.status_label.text = "链接已复制"
         else:
@@ -264,6 +265,13 @@ class ImagePublisher(BoxLayout):
 
 
 class LskyApp(App):
+    font_path = StringProperty("")
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if FONT_PATH.exists():
+            self.font_path = str(FONT_PATH)
+
     def build(self):
         return ImagePublisher()
 
